@@ -2,13 +2,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.optim as optim
 import torchvision.transforms as transforms
 import torchvision.datasets as dsets
+import time
 
 #Load the data
-train_data = dsets.MNIST(root = './data', train=True, download=True, transform=transforms.ToTensor())
-test_data = dsets.MNIST(root = './data', train=False, transform = transforms.ToTensor())
+#train_data = dsets.MNIST(root = './data', train=True, download=True, transform=transforms.ToTensor())
+#test_data = dsets.MNIST(root = './data', train=False, transform = transforms.ToTensor())
 
+train_data = dsets.FashionMNIST(root='./data', train=True, download=True, transform=transforms.ToTensor())
+test_data = dsets.FashionMNIST(root='./data', train=False, transform=transforms.ToTensor())
 
 
 #Make data iterable
@@ -22,60 +26,104 @@ test_loader = torch.utils.data.DataLoader(dataset=test_data, batch_size=batch_si
 class LogisticRegressionModel(nn.Module):
     def __init__(self, input_size, num_classes):
         super(LogisticRegressionModel, self).__init__()
-        self.linear = nn.Linear(input_dim, output_dim)
+        self.fc = nn.Linear(input_size, num_classes)
 
     def forward(self, x):
-        out = self.linear(x)
-        return out
+        x = x.view(-1, 28*28)
+        return self.fc(x)
 
 
-def train_model(model, optimizer, num_epochs, train_loader):
+
+def train_and_test(optimizer_name, model, train_loader, test_loader):
+    lr = 0.1
+    if optimizer_name == "Adamax":
+        optimizer = optim.Adamax(model.parameters(), lr=lr)
+    elif optimizer_name == "Adam":
+        optimizer = optim.Adam(model.parameters(), lr=lr)
+    elif optimizer_name == "RMSprop":
+        optimizer = optim.RMSprop(model.parameters(), lr=lr)
+    elif optimizer_name == "Adadelta":
+        optimizer = optim.RMSprop(model.parameters(), lr=lr)
+    loss_fn = nn.CrossEntropyLoss()
+
+    start_time = time.perf_counter()
     model.train()
+
     for epoch in range(num_epochs):
+        running_loss = 0
+        total = 0
+        correct = 0
         for i, (images, labels) in enumerate(train_loader):
             optimizer.zero_grad()
-            images = images.view(-1, 28*28).requires_grad_()
             outputs = model(images)
-            loss = loss_func(outputs, labels)
+            loss = loss_fn(outputs, labels)
             loss.backward()
             optimizer.step()
 
-def test_model(model, test_loader):
+            running_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {running_loss / len(train_loader):.4f}, Accuracy: {100 * correct / total:.2f}%')
+
+
     iter_test = 0
     correct = 0
     total = 0
     model.eval()
     for images, labels in test_loader:
         iter_test += 1
-        images = images.view(-1, 28 * 28).requires_grad_()
         outputs = model(images)
         _, predicted = torch.max(outputs.data, 1)
         total += labels.size(0)
-        correct += (predicted == labels).sum()
-    return (correct / total)
+        correct += (predicted == labels).sum().item()
 
+    end_time = time.perf_counter()
+    accuracy = correct / total
+    time_to_converge = end_time - start_time
+    return accuracy, time_to_converge
 
-loss_func = torch.nn.CrossEntropyLoss()
-learning_rate = 0.001
 input_dim = 28*28
-output_dim = 10
-model = LogisticRegressionModel(input_dim, output_dim)
-optimizers = {"Adam":torch.optim.Adam(model.parameters(), lr=learning_rate),
-              "Adamax":torch.optim.Adamax(model.parameters(), lr=learning_rate),
-              "Adadelta":torch.optim.Adadelta(model.parameters(), lr=learning_rate),
-              "RMSprop":torch.optim.RMSprop(model.parameters(),lr=learning_rate)}
+num_classes = 10
+#model = LogisticRegressionModel(input_dim, num_classes)
+optimizers = ["Adam","Adamax","Adadelta","RMSprop"]
 accuracies = {}
-for opt_name, optimizer in optimizers.items():
-    model = LogisticRegressionModel(28*28, 10)
-    train_model(model, optimizer, num_epochs, train_loader)
-    accuracies[opt_name] = test_model(model, test_loader)
+convergence_times = {}
+for opt_name in optimizers:
+    model = LogisticRegressionModel(input_dim, num_classes)
+    accuracies[opt_name], convergence_times[opt_name] = train_and_test(opt_name, model, train_loader, test_loader)
 
+# Plotting the results
+fig, ax1 = plt.subplots(figsize=(10, 6))
 
+# Bar plot for accuracy and convergence time
+bar_width = 0.35  # Width of the bars
+index = np.arange(len(list(convergence_times.keys())))  # x positions for each optimizer
 
+# Bar plot for accuracy (shifted by -bar_width/2)
+ax1.bar(index - bar_width/2, list(accuracies.values()), bar_width, label='Accuracy', color='blue')
+ax1.set_xlabel('Optimizer')
+ax1.set_ylabel('Accuracy')
+ax1.set_ylim(0.7, .9)
+ax1.tick_params(axis='y')
+ax1.legend(loc = 'upper left')
 
+# Bar plot for convergence time (shifted by bar_width/2)
+ax2 = ax1.twinx()
+ax2.bar(index + bar_width/2, list(convergence_times.values()), bar_width, label='Convergence Time (s)', color='red')
+ax2.set_ylabel('Convergence Time (s)')
+ax2.set_ylim(14, 18)
+ax2.tick_params(axis='y')
+ax2.legend(loc = 'upper right')
 
-plt.bar(list(accuracies.keys()), list(accuracies.values()), width=0.4)
-plt.xlabel("Optimizers")
-plt.ylabel("Accuracy")
-plt.title("Accuracy of different opitmizers on MNIST dataset using logistic regression")
+# Labels and title
+plt.title("Fashion MNIST dataset with learning rate 0.1")
+plt.xticks(index, list(convergence_times.keys()))
+fig.tight_layout()
 plt.show()
+
+
+
+
+
+

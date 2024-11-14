@@ -4,6 +4,8 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
+import time
+import numpy as np
 
 # Transformations to apply to the data (normalization)
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
@@ -39,18 +41,27 @@ model = NeuralNetwork()
 criterion = nn.CrossEntropyLoss()
 
 # Define optimizers
-optimizers = {
-    'Adamax': optim.Adamax(model.parameters(), lr=0.01),
-    'Adadelta': optim.Adadelta(model.parameters(), lr=0.01),
-    'Adam': optim.Adam(model.parameters(), lr=0.001),
-    'RMSprop': optim.RMSprop(model.parameters(), lr=0.001)
-}
+optimizers = optimizers = ["Adam","Adamax","Adadelta","RMSprop"]
 
-def train_model(model, optimizer, train_loader, num_epochs=5):
+def train_and_test(model, optimizer_name, train_loader, test_loader, num_epochs=5):
+    lr = 0.01
+    if optimizer_name == "Adamax":
+        optimizer = optim.Adamax(model.parameters(), lr=lr)
+    elif optimizer_name == "Adam":
+        optimizer = optim.Adam(model.parameters(), lr=lr)
+    elif optimizer_name == "RMSprop":
+        optimizer = optim.RMSprop(model.parameters(), lr=lr)
+    elif optimizer_name == "Adadelta":
+        optimizer = optim.RMSprop(model.parameters(), lr=lr)
+    loss_fn = nn.CrossEntropyLoss()
+
+    start_time = time.perf_counter()
     model.train()  # Set model to training mode
     for epoch in range(num_epochs):
         running_loss = 0
-        for images, labels in train_loader:
+        total = 0
+        correct = 0
+        for i, (images, labels) in enumerate(train_loader):
             # Zero the gradients
             optimizer.zero_grad()
 
@@ -63,8 +74,11 @@ def train_model(model, optimizer, train_loader, num_epochs=5):
             optimizer.step()
 
             running_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {running_loss / len(train_loader):.4f}, Accuracy: {100 * correct / total:.2f}%')
 
-def evaluate_model(model, test_loader):
     model.eval()  # Set model to evaluation mode
     correct = 0
     total = 0
@@ -75,25 +89,49 @@ def evaluate_model(model, test_loader):
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
+    end_time = time.perf_counter()
     accuracy = correct / total
-    return accuracy
+    convergence_time = end_time-start_time
+    return accuracy, convergence_time
 
 accuracies = {}
-for opt_name, optimizer in optimizers.items():
+convergence_times = {}
+for opt_name in optimizers:
     print(f'\nTraining with {opt_name} optimizer:')
 
     # Reinitialize the model for each optimizer
     model = NeuralNetwork()
 
     # Train the model
-    train_model(model, optimizer, train_loader, num_epochs=5)
-
-    # Evaluate the model
-    accuracies[opt_name] = evaluate_model(model, test_loader)
+    accuracies[opt_name], convergence_times[opt_name] = train_and_test(model, opt_name, train_loader, test_loader)
 
 
-plt.bar(list(accuracies.keys()), list(accuracies.values()), width=0.4)
-plt.xlabel("Optimizers")
-plt.ylabel("Accuracy")
-plt.title("Accuracy of different optimizers on MNIST dataset using neural network")
+# Plotting the results
+fig, ax1 = plt.subplots(figsize=(10, 6))
+
+# Bar plot for accuracy and convergence time
+bar_width = 0.35  # Width of the bars
+index = np.arange(len(list(convergence_times.keys())))  # x positions for each optimizer
+
+# Bar plot for accuracy (shifted by -bar_width/2)
+ax1.bar(index - bar_width/2, list(accuracies.values()), bar_width, label='Accuracy', color='blue')
+ax1.set_xlabel('Optimizer')
+ax1.set_ylabel('Accuracy')
+ax1.set_ylim(0.75, 1)
+ax1.tick_params(axis='y')
+ax1.legend(loc = 'upper left')
+
+# Bar plot for convergence time (shifted by bar_width/2)
+ax2 = ax1.twinx()
+ax2.bar(index + bar_width/2, list(convergence_times.values()), bar_width, label='Convergence Time (s)', color='red')
+ax2.set_ylabel('Convergence Time (s)')
+#ax2.set_ylim(14, 18)
+ax2.tick_params(axis='y')
+ax2.legend(loc = 'upper right')
+
+# Labels and title
+plt.title("MNIST dataset with learning rate 0.01 (NN)")
+plt.xticks(index, list(convergence_times.keys()))
+fig.tight_layout()
 plt.show()
+
