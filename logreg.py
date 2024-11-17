@@ -44,6 +44,8 @@ def train_and_test(optimizer_name, model, train_loader, test_loader):
         optimizer = optim.RMSprop(model.parameters(), lr=lr)
     elif optimizer_name == "Adadelta":
         optimizer = optim.RMSprop(model.parameters(), lr=lr)
+    elif optimizer_name == "L-BFGS":
+        optimizer = optim.LBFGS(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
 
     start_time = time.perf_counter()
@@ -54,11 +56,22 @@ def train_and_test(optimizer_name, model, train_loader, test_loader):
         total = 0
         correct = 0
         for i, (images, labels) in enumerate(train_loader):
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = loss_fn(outputs, labels)
-            loss.backward()
-            optimizer.step()
+            if optimizer_name == "L-BFGS":
+                def closure():
+                    optimizer.zero_grad()
+                    outputs = model(images)
+                    loss = loss_fn(outputs, labels)
+                    loss.backward()
+                    return loss
+                
+                loss = optimizer.step(closure)
+                outputs = model(images)
+            else:
+                optimizer.zero_grad()
+                outputs = model(images)
+                loss = loss_fn(outputs, labels)
+                loss.backward()
+                optimizer.step()
 
             running_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
@@ -86,7 +99,7 @@ def train_and_test(optimizer_name, model, train_loader, test_loader):
 input_dim = 28*28
 num_classes = 10
 #model = LogisticRegressionModel(input_dim, num_classes)
-optimizers = ["Adam","Adamax","Adadelta","RMSprop"]
+optimizers = ["Adam","Adamax","Adadelta","RMSprop", "L-BFGS"]
 accuracies = {}
 convergence_times = {}
 for opt_name in optimizers:
