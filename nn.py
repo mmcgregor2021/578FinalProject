@@ -41,7 +41,8 @@ model = NeuralNetwork()
 criterion = nn.CrossEntropyLoss()
 
 # Define optimizers
-optimizers = optimizers = ["Adam","Adamax","Adadelta","RMSprop"]
+optimizers = ["Adam","Adamax","Adadelta","RMSprop", "L-BFGS"]
+# optimizers = ["L-BFGS"]
 
 def train_and_test(model, optimizer_name, train_loader, test_loader, num_epochs=5):
     lr = 0.01
@@ -52,7 +53,9 @@ def train_and_test(model, optimizer_name, train_loader, test_loader, num_epochs=
     elif optimizer_name == "RMSprop":
         optimizer = optim.RMSprop(model.parameters(), lr=lr)
     elif optimizer_name == "Adadelta":
-        optimizer = optim.RMSprop(model.parameters(), lr=lr)
+        optimizer = optim.Adadelta(model.parameters(), lr=lr)
+    elif optimizer_name == "L-BFGS":
+        optimizer = optim.LBFGS(model.parameters(), lr=lr)  
     loss_fn = nn.CrossEntropyLoss()
 
     start_time = time.perf_counter()
@@ -62,16 +65,28 @@ def train_and_test(model, optimizer_name, train_loader, test_loader, num_epochs=
         total = 0
         correct = 0
         for i, (images, labels) in enumerate(train_loader):
-            # Zero the gradients
-            optimizer.zero_grad()
-
-            # Forward pass
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-
-            # Backward pass and optimization
-            loss.backward()
-            optimizer.step()
+            # For L-BFGS, we need to define a closure function
+            if optimizer_name == "L-BFGS":
+                def closure():
+                    optimizer.zero_grad()
+                    outputs = model(images)
+                    loss = criterion(outputs, labels)
+                    loss.backward()
+                    return loss
+                
+                # Use the closure function with L-BFGS
+                optimizer.step(closure)
+                
+                # Calculate statistics
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+            else:
+                # Original code for other optimizers
+                optimizer.zero_grad()
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
 
             running_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
