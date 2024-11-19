@@ -7,6 +7,13 @@ import matplotlib.pyplot as plt
 import time
 import numpy as np
 
+# Set the seed for reproducibility
+seed = 42
+torch.manual_seed(seed)
+np.random.seed(seed)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
 # Transformations to apply to the data (normalization)
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
 
@@ -44,18 +51,21 @@ criterion = nn.CrossEntropyLoss()
 optimizers = ["Adam","Adamax","Adadelta","RMSprop", "L-BFGS"]
 # optimizers = ["L-BFGS"]
 
-def train_and_test(model, optimizer_name, train_loader, test_loader, num_epochs=5):
-    lr = 0.01
+def train_and_test(model, optimizer_name, train_loader, test_loader, num_epochs=10):
     if optimizer_name == "Adamax":
-        optimizer = optim.Adamax(model.parameters(), lr=lr)
+        optimizer = optim.Adamax(model.parameters(), lr=0.01)
     elif optimizer_name == "Adam":
-        optimizer = optim.Adam(model.parameters(), lr=lr)
+        optimizer = optim.Adam(model.parameters(), lr=0.01)
     elif optimizer_name == "RMSprop":
-        optimizer = optim.RMSprop(model.parameters(), lr=lr)
+        optimizer = optim.RMSprop(model.parameters(), lr=0.01)
     elif optimizer_name == "Adadelta":
-        optimizer = optim.Adadelta(model.parameters(), lr=lr)
+        optimizer = optim.Adadelta(model.parameters(), lr=0.01)
     elif optimizer_name == "L-BFGS":
-        optimizer = optim.LBFGS(model.parameters(), lr=lr)  
+        optimizer = optim.LBFGS(model.parameters(), 
+                               lr=0.01,
+                               max_iter=20,
+                               history_size=10,
+                               line_search_fn="strong_wolfe")
     loss_fn = nn.CrossEntropyLoss()
 
     start_time = time.perf_counter()
@@ -74,12 +84,13 @@ def train_and_test(model, optimizer_name, train_loader, test_loader, num_epochs=
                     loss.backward()
                     return loss
                 
-                # Use the closure function with L-BFGS
-                optimizer.step(closure)
-                
-                # Calculate statistics
+                # Move these outside the closure
+                optimizer.zero_grad()
+                loss = optimizer.step(closure)
                 outputs = model(images)
-                loss = criterion(outputs, labels)
+                
+                # Use the actual loss value
+                running_loss += loss.item()
             else:
                 # Original code for other optimizers
                 optimizer.zero_grad()
@@ -145,7 +156,7 @@ ax2.tick_params(axis='y')
 ax2.legend(loc = 'upper right')
 
 # Labels and title
-plt.title("MNIST dataset with learning rate 0.01 (NN)")
+plt.title("MNIST dataset (NN)")
 plt.xticks(index, list(convergence_times.keys()))
 fig.tight_layout()
 plt.show()
