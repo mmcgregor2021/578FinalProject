@@ -1,0 +1,13 @@
+# Exclude model weights and checkpoints
+*.h5
+*.ckpt
+*.pth
+*.pt
+
+# Exclude logs and outputs
+logs/
+output/
+results/
+
+# Exclude datasets
+data/
