@@ -12,7 +12,7 @@ from models import LogisticRegressionModel, NeuralNetwork
 SEEDS = [42, 43, 44]
 DATASET_NAME = "cifar10"  # Options: "mnist", "fashion_mnist", "cifar10"
 MODEL_TYPES = ["logistic_regression", "nn"]
-OPTIMIZER_TYPES = ["Adam", "Adamax", "Adadelta"] # Add LBFGS
+OPTIMIZER_TYPES = ["Adam", "Adamax", "Adadelta", "LBFGS"]
 BATCH_SIZE = 64
 NUM_EPOCHS = 10
 NUM_EPOCHS = 50  # High, so early stopping can be effective
@@ -64,11 +64,12 @@ def train_and_validate(model, train_loader, val_loader, optimizer, loss_fn, num_
     for epoch in range(num_epochs):
         model.train()
         train_loss, train_correct, train_total = 0.0, 0, 0
-
+        # For LBFGS optimizer, closure function is required
         for inputs, labels in train_loader:
-            # For LBFGS optimizer, closure function is required
             if optimizer_type == "LBFGS":
+                outputs = None  # Initialize outputs variable
                 def closure():
+                    nonlocal outputs  # Allow closure to modify outputs
                     optimizer.zero_grad()
                     outputs = model(inputs)
                     loss = loss_fn(outputs, labels)
@@ -81,7 +82,7 @@ def train_and_validate(model, train_loader, val_loader, optimizer, loss_fn, num_
                 loss = loss_fn(outputs, labels)
                 loss.backward()
                 optimizer.step()
-
+           
             train_loss += loss.item()
             _, preds = torch.max(outputs, 1)
             train_correct += (preds == labels).sum().item()
