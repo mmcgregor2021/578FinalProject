@@ -10,15 +10,15 @@ from torch.utils.data import random_split
 import os
 
 
-seeds = [42, 43]
+seeds = [42, 43, 44, 45, 46]
 total_accuracies = []
 total_convergence = []
 TOTAL_EPOCHS = []
-optimizers = ["Adam", "Adadelta", "Adamax"]
+optimizers = ["Adadelta", "Adam", "Adamax", "L-BFGS"]
 results = {opt: [] for opt in optimizers}
 all_val_accuracies = {opt: [] for opt in optimizers}
 only_test = True
-PATH = "/Users/brunajasinowodolinski/Desktop/project/"
+PATH = "/Users/brunajasinowodolinski/Desktop/578FinalProject/brunas_code"
 
 
 for seed in seeds:
