@@ -1,58 +1,73 @@
 import os
 import torch
 import numpy as np
-import time
-from datasets import load_train_data, load_test_data
-from models import NeuralNetwork, LogisticRegressionModel
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from torch.optim import Adam, Adamax, Adadelta, LBFGS
 from torch.nn import CrossEntropyLoss
-import matplotlib.pyplot as plt
-
+from datasets import load_train_data, load_test_data
+from models import LogisticRegressionModel, NeuralNetwork
 
 # Hyperparameters
 SEEDS = [42, 43, 44]
-DATASET_NAME = "mnist"  # "mnist", "fashion_mnist", "cifar10"
-# OPTIMIZER_TYPES = ["Adadelta", "Adam", "Adamax"]
-OPTIMIZER_TYPES = ["LBFGS"]
-
-MODEL_TYPES = ["logreg"]  # nn, logreg # Currently only supporting "nn"
-NUM_EPOCHS = 30
-PATIENCE = 5
+DATASET_NAME = "mnist"  # Options: "mnist", "fashion_mnist", "cifar10"
+MODEL_TYPES = ["logistic_regression", "nn"]
+OPTIMIZER_TYPES = ["Adam", "Adamax", "Adadelta", "LBFGS"]
 BATCH_SIZE = 64
-LEARNING_RATE = 0.005
+NUM_EPOCHS = 10
+NUM_EPOCHS = 50  # High, so early stopping can be effective
+PATIENCE = 5  # Number of epochs to wait for improvement
+EARLY_STOPPING = True
+
+# Directory to save model weights and logs
 SAVE_DIR = "./results"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 def set_seed(seed):
+
     torch.manual_seed(seed)
     np.random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
 
-def train_and_validate(model, train_loader, val_loader, test_loader, optimizer, loss_fn, optimizer_type, save_path):
-    best_val_acc = 0
+def initialize_model(model_type, input_size, num_classes):
+
+    if model_type == "logistic_regression":
+        return LogisticRegressionModel(input_size, num_classes)
+    elif model_type == "nn":
+        return NeuralNetwork(input_size, num_classes)
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
+
+def initialize_optimizer(optimizer_type, model):
+
+    if optimizer_type == "Adam":
+        return Adam(model.parameters(), lr=0.01)
+    elif optimizer_type == "Adamax":
+        return Adamax(model.parameters(), lr=0.01)
+    elif optimizer_type == "Adadelta":
+        return Adadelta(model.parameters(), lr=1.0)
+    elif optimizer_type == "LBFGS":
+        return LBFGS(model.parameters(), lr=0.001)
+    else:
+        raise ValueError(f"Unsupported optimizer type: {optimizer_type}")
+
+def train_and_validate(model, train_loader, val_loader, optimizer, loss_fn, num_epochs, optimizer_type, model_type, early_stopping=False, patience=5, save_path=None):
+    
+    best_val_loss = float('inf')
+    best_model_state = None
+    train_losses = []
+    val_accuracies = []
+    val_losses = []
     epochs_no_improve = 0
-    start_time = time.perf_counter()
-    best_model_state = model.state_dict()
 
-    train_losses = []  # List to store training losses per epoch
-    val_losses = []    # List to store validation losses per epoch
-    val_accuracies = []  # List to store validation accuracies per epoch
-
-    for epoch in range(NUM_EPOCHS):
-        if epochs_no_improve >= PATIENCE:
-            print(f"Early stopping at epoch {epoch + 1}")
-            break
-
+    for epoch in range(num_epochs):
         model.train()
-        running_loss = 0.0
-        correct, total = 0, 0
-
+        train_loss, train_correct, train_total = 0.0, 0, 0
+        # For LBFGS optimizer, closure function is required
         for inputs, labels in train_loader:
             if optimizer_type == "LBFGS":
                 outputs = None  # Initialize outputs variable
-
                 def closure():
                     nonlocal outputs  # Allow closure to modify outputs
                     optimizer.zero_grad()
@@ -67,140 +82,141 @@ def train_and_validate(model, train_loader, val_loader, test_loader, optimizer, 
                 loss = loss_fn(outputs, labels)
                 loss.backward()
                 optimizer.step()
+           
+            train_loss += loss.item()
+            _, preds = torch.max(outputs, 1)
+            train_correct += (preds == labels).sum().item()
+            train_total += labels.size(0)
 
-            running_loss += loss.item()
-            _, predicted = torch.max(outputs, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+        train_losses.append(train_loss / len(train_loader))
+        train_accuracy = train_correct / train_total
 
-        train_losses.append(running_loss / len(train_loader))  # Track average training loss
+        # Validation loop
+        model.eval()
+        val_loss, val_correct, val_total = 0.0, 0, 0
 
-        # Validate the model
-        val_loss, val_acc = validate_and_get_metrics(model, val_loader, loss_fn)
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                outputs = model(inputs)
+                loss = loss_fn(outputs, labels)
+
+                val_loss += loss.item()
+                _, preds = torch.max(outputs, 1)
+                val_correct += (preds == labels).sum().item()
+                val_total += labels.size(0)
+
+        val_accuracy = val_correct / val_total
+        val_loss /= len(val_loader)
         val_losses.append(val_loss)
-        val_accuracies.append(val_acc)
+        val_accuracies.append(val_accuracy)
 
-        print(f'Epoch [{epoch + 1}/{NUM_EPOCHS}], Loss: {running_loss / len(train_loader):.4f}, '
-              f'Train Acc: {100 * correct / total:.2f}%, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%')
-
-        # Check for improvement in validation accuracy
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            epochs_no_improve = 0
+        # Check for improvement
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             best_model_state = model.state_dict()
+            epochs_no_improve = 0
+            # Save the best model
+            if save_path:
+                torch.save(best_model_state, save_path)
         else:
             epochs_no_improve += 1
 
-    # Save the best model
-    torch.save(best_model_state, save_path)
-    end_time = time.perf_counter()
+        print(f"Epoch {epoch + 1}/{num_epochs}, "
+              f"Train Loss: {train_losses[-1]:.4f}, Train Acc: {train_accuracy:.4f}, "
+              f"Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.4f}")
 
-    # Return collected metrics
-    train_time = end_time - start_time
-    return train_losses, val_losses, val_accuracies, train_time
+        # Early stopping
+        if early_stopping and epochs_no_improve >= patience:
+            print(f"Early stopping triggered after {epoch + 1} epochs.")
+            break
 
+    return train_losses, val_accuracies, val_losses, best_model_state
 
-def validate_and_get_metrics(model, val_loader, loss_fn):
-    model.eval()
-    val_loss = 0.0
-    correct, total = 0, 0
-
-    with torch.no_grad():
-        for inputs, labels in val_loader:
-            outputs = model(inputs)
-            loss = loss_fn(outputs, labels)
-            val_loss += loss.item()
-
-            _, predicted = torch.max(outputs, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-
-    val_loss /= len(val_loader)  # Average validation loss
-    val_acc = 100 * correct / total  # Validation accuracy in percentage
-    return val_loss, val_acc
-
-# Align arrays for averaging by padding shorter arrays with NaNs
-def pad_and_average(losses):
-    max_length = max(len(seed_losses) for seed_losses in losses)  # Find the longest array
-    padded_losses = np.full((len(losses), max_length), np.nan)  # Initialize with NaNs
-
-    for i, seed_losses in enumerate(losses):
-        padded_losses[i, :len(seed_losses)] = seed_losses  # Fill with seed losses
-
-    mean_losses = np.nanmean(padded_losses, axis=0)  # Compute mean ignoring NaNs
-    return mean_losses
 
 def main():
-    all_train_losses = {optimizer_type: [] for optimizer_type in OPTIMIZER_TYPES}
-    all_val_losses = {optimizer_type: [] for optimizer_type in OPTIMIZER_TYPES}
-    all_val_accuracies = {optimizer_type: [] for optimizer_type in OPTIMIZER_TYPES}
 
-    for seed in SEEDS:
-        set_seed(seed)
-        train_loader, val_loader, num_classes, input_size = load_train_data(batch_size=BATCH_SIZE)
-        test_loader = load_test_data(batch_size=BATCH_SIZE)
+    # Load datasets
+    train_dataset, val_dataset, normalization_stats = load_train_data(DATASET_NAME)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-        for model_type in MODEL_TYPES:
-            for optimizer_type in OPTIMIZER_TYPES:
-                print(f"\nTraining {model_type} model with {optimizer_type} optimizer (Seed {seed})")
+    input_size = train_dataset[0][0].shape[0]
+    num_classes = len(set(train_dataset[:][1].tolist()))  # Infer number of classes
 
-                if model_type == "nn":
-                    model = NeuralNetwork(input_size, num_classes)
-                elif model_type == "logreg":
-                    model = LogisticRegressionModel(input_size, num_classes)
-                else:
-                    raise ValueError(f"Unsupported model type: {model_type}")
+    for model_type in MODEL_TYPES:
+        # Initialize dictionaries to hold metrics for each optimizer
+        all_train_losses = {}
+        all_val_accuracies = {}
+        all_val_losses = {}
+        for optimizer_type in OPTIMIZER_TYPES:
+            avg_train_losses = np.zeros(NUM_EPOCHS)
+            avg_val_accuracies = np.zeros(NUM_EPOCHS)
+            avg_val_losses = np.zeros(NUM_EPOCHS)
+            actual_epochs = NUM_EPOCHS
 
-                save_path = os.path.join(SAVE_DIR, f"{model_type}-{DATASET_NAME}-{optimizer_type}-seed{seed}.pt")
-
-                if optimizer_type == "Adam":
-                    optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
-                elif optimizer_type == "Adamax":
-                    optimizer = Adamax(model.parameters(), lr=LEARNING_RATE)
-                elif optimizer_type == "Adadelta":
-                    optimizer = Adadelta(model.parameters())
-                elif optimizer_type == "LBFGS":
-                    optimizer = LBFGS(model.parameters(), lr=0.001)
-                else:
-                    raise ValueError(f"Unsupported optimizer: {optimizer_type}")
-
+            for seed in SEEDS:
+                set_seed(seed)
+                # Initialize model, optimizer, and loss function
+                model = initialize_model(model_type, input_size, num_classes)
+                optimizer = initialize_optimizer(optimizer_type, model)
                 loss_fn = CrossEntropyLoss()
-                train_losses, val_losses, val_accuracies, train_time = train_and_validate(
-                    model, train_loader, val_loader, test_loader, optimizer, loss_fn, optimizer_type, save_path
+
+                print(f"\nTraining {model_type} with {optimizer_type} optimizer, Seed: {seed}")
+                save_path = os.path.join(SAVE_DIR, f"{model_type}-{DATASET_NAME}-{optimizer_type}-seed{seed}.pt")
+                
+                # Run training and validation
+                train_losses, val_accuracies, val_losses, best_model_state = train_and_validate(
+                    model, train_loader, val_loader, optimizer, loss_fn, NUM_EPOCHS, optimizer_type, model_type,
+                    early_stopping=EARLY_STOPPING, patience=PATIENCE, save_path=save_path
                 )
-                print(f"Final Validation Accuracy: {val_accuracies[-1]:.2f}%, Training Time: {train_time:.2f}s")
 
-                # Accumulate losses and accuracies for plotting
-                all_train_losses[optimizer_type].append(train_losses)
-                all_val_losses[optimizer_type].append(val_losses)
-                all_val_accuracies[optimizer_type].append(val_accuracies)
+                epochs_run = len(train_losses)
+                avg_train_losses[:epochs_run] += np.array(train_losses)
+                avg_val_accuracies[:epochs_run] += np.array(val_accuracies)
+                avg_val_losses[:epochs_run] += np.array(val_losses)
+                actual_epochs = min(actual_epochs, epochs_run)
 
-    # Plot and save validation loss curves
-    plt.figure()
+            # Average the metrics over all seeds
+            avg_train_losses = avg_train_losses[:actual_epochs] / len(SEEDS)
+            avg_val_accuracies = avg_val_accuracies[:actual_epochs] / len(SEEDS)
+            avg_val_losses = avg_val_losses[:actual_epochs] / len(SEEDS)
 
-    for optimizer_type, losses in all_val_losses.items():
-        mean_losses = pad_and_average(losses)  # Average across seeds
-        plt.plot(range(1, len(mean_losses) + 1), mean_losses, label=optimizer_type)
-    
-    plt.title(f'Validation Loss for {model_type} on {DATASET_NAME}')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.savefig(os.path.join(SAVE_DIR, f'{model_type}_{DATASET_NAME}_validation_loss.png'))
-    plt.close()
+            all_train_losses[optimizer_type] = avg_train_losses
+            all_val_accuracies[optimizer_type] = avg_val_accuracies
+            all_val_losses[optimizer_type] = avg_val_losses
 
-    # Plot and save validation accuracy curves
-    plt.figure()
-    for optimizer_type, accuracies in all_val_accuracies.items():
-        mean_accuracies = pad_and_average(accuracies)  # Average across seeds
-        plt.plot(range(1, len(mean_accuracies) + 1), mean_accuracies, label=optimizer_type)
-    
-    plt.title(f'Validation Accuracy for {model_type} on {DATASET_NAME}')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
-    plt.legend()
-    plt.savefig(os.path.join(SAVE_DIR, f'{model_type}_{DATASET_NAME}_validation_accuracy.png'))
-    plt.close()
+        # Plot and save the loss curves
+        plt.figure()
+        for optimizer_type in OPTIMIZER_TYPES:
+            plt.plot(range(1, len(all_train_losses[optimizer_type]) + 1), all_train_losses[optimizer_type], label=optimizer_type)
+        plt.title(f'Training Loss for {model_type} on {DATASET_NAME}')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.savefig(os.path.join(SAVE_DIR, f'{model_type}_{DATASET_NAME}_training_loss.png'))
+        plt.close()
+
+        # Plot and save the validation loss curves
+        plt.figure()
+        for optimizer_type in OPTIMIZER_TYPES:
+            plt.plot(range(1, len(all_val_losses[optimizer_type]) + 1), all_val_losses[optimizer_type], label=optimizer_type)
+        plt.title(f'Validation Loss for {model_type} on {DATASET_NAME}')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.savefig(os.path.join(SAVE_DIR, f'{model_type}_{DATASET_NAME}_validation_loss.png'))
+        plt.close()
+
+        # Plot and save the validation accuracy curves
+        plt.figure()
+        for optimizer_type in OPTIMIZER_TYPES:
+            plt.plot(range(1, len(all_val_accuracies[optimizer_type]) + 1), all_val_accuracies[optimizer_type], label=optimizer_type)
+        plt.title(f'Validation Accuracy for {model_type} on {DATASET_NAME}')
+        plt.xlabel('Epochs')
+        plt.ylabel('Accuracy')
+        plt.legend()
+        plt.savefig(os.path.join(SAVE_DIR, f'{model_type}_{DATASET_NAME}_validation_accuracy.png'))
+        plt.close()
 
 if __name__ == "__main__":
     main()
